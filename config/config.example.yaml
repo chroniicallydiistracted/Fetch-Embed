@@ -1,0 +1,82 @@
+# Fetch-Embed Configuration File
+# Copy this to config.yaml and customize as needed
+
+# API Configuration
+api:
+  # Google Books API
+  google_books:
+    enabled: true
+    api_key: ""  # Optional but recommended for higher rate limits
+                 # Get your key at: https://console.cloud.google.com/apis/credentials
+    base_url: "https://www.googleapis.com/books/v1"
+    timeout: 10
+    max_results: 5
+
+  # OpenLibrary API
+  openlibrary:
+    enabled: true
+    base_url: "https://openlibrary.org"
+    timeout: 10
+    max_results: 5
+
+  # ISBNdb API (optional, requires paid API key)
+  isbndb:
+    enabled: false
+    api_key: ""  # Get your key at: https://isbndb.com/
+    base_url: "https://api2.isbndb.com"
+    timeout: 10
+
+# Matching Configuration
+matching:
+  # Weight for title matching (0-1)
+  title_weight: 0.4
+
+  # Weight for author matching (0-1)
+  author_weight: 0.3
+
+  # Weight for ISBN matching (0-1)
+  isbn_weight: 0.3
+
+  # Minimum confidence threshold for accepting results (0-1)
+  min_confidence_threshold: 0.6
+
+  # Fuzzy matching threshold (0-100)
+  fuzzy_threshold: 80
+
+# Processing Configuration
+processing:
+  # Backup original files before modification
+  backup_original: true
+
+  # Directory for backup files (relative to ebook file location)
+  backup_dir: ".backups"
+
+  # Supported file formats
+  supported_formats:
+    - .epub
+    - .mobi
+    - .azw3
+    - .pdf
+
+  # Use filename for fuzzy matching if metadata is missing/poor
+  use_filename_fallback: true
+
+  # Overwrite existing metadata
+  overwrite_existing: true
+
+  # Preserve custom metadata fields
+  preserve_custom_fields: true
+
+# Logging Configuration
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Log file path (leave empty to disable file logging)
+  file: "fetch_embed.log"
+
+  # Enable console logging
+  console: true
