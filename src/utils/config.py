@@ -31,13 +31,32 @@ class Config:
                     'api_key': os.getenv('GOOGLE_BOOKS_API_KEY', ''),
                     'base_url': 'https://www.googleapis.com/books/v1',
                     'timeout': 10,
-                    'max_results': 5
+                    'max_results': 5,
+                    'max_retries': 3,
+                    'rate_limit_delay': 0.1,
+                    'enable_cache': True,
+                    'cache_ttl_hours': 24
                 },
                 'openlibrary': {
                     'enabled': True,
                     'base_url': 'https://openlibrary.org',
                     'timeout': 10,
-                    'max_results': 5
+                    'max_results': 5,
+                    'max_retries': 3,
+                    'rate_limit_delay': 1.0,
+                    'enable_cache': True,
+                    'cache_ttl_hours': 24
+                },
+                'audible': {
+                    'enabled': False,
+                    'api_key': os.getenv('AUDIBLE_API_KEY', ''),
+                    'base_url': 'https://www.audible.com',
+                    'timeout': 10,
+                    'max_retries': 3,
+                    'rate_limit_delay': 2.0,
+                    'enable_cache': True,
+                    'cache_ttl_hours': 24,
+                    'region': 'us'
                 },
                 'isbndb': {
                     'enabled': False,

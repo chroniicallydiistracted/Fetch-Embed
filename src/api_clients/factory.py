@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from .base import BaseAPIClient, APIResult
 from .google_books import GoogleBooksClient
 from .openlibrary import OpenLibraryClient
+from .audible import AudibleClient
 from ..utils.config import get_config
 from ..utils.logger import get_logger
 
@@ -34,7 +35,11 @@ class APIClientFactory:
                 client = GoogleBooksClient(
                     api_key=gb_config.get('api_key'),
                     timeout=gb_config.get('timeout', 10),
-                    max_results=gb_config.get('max_results', 5)
+                    max_results=gb_config.get('max_results', 5),
+                    max_retries=gb_config.get('max_retries', 3),
+                    rate_limit_delay=gb_config.get('rate_limit_delay', 0.1),
+                    enable_cache=gb_config.get('enable_cache', True),
+                    cache_ttl_hours=gb_config.get('cache_ttl_hours', 24)
                 )
                 self.clients.append(client)
                 logger.info("Google Books API client initialized")
@@ -47,12 +52,34 @@ class APIClientFactory:
                 ol_config = api_config['openlibrary']
                 client = OpenLibraryClient(
                     timeout=ol_config.get('timeout', 10),
-                    max_results=ol_config.get('max_results', 5)
+                    max_results=ol_config.get('max_results', 5),
+                    max_retries=ol_config.get('max_retries', 3),
+                    rate_limit_delay=ol_config.get('rate_limit_delay', 1.0),
+                    enable_cache=ol_config.get('enable_cache', True),
+                    cache_ttl_hours=ol_config.get('cache_ttl_hours', 24)
                 )
                 self.clients.append(client)
                 logger.info("OpenLibrary API client initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize OpenLibrary client: {str(e)}")
+
+        # Initialize Audible if enabled
+        if api_config.get('audible', {}).get('enabled', False):
+            try:
+                audible_config = api_config['audible']
+                client = AudibleClient(
+                    api_key=audible_config.get('api_key'),
+                    timeout=audible_config.get('timeout', 10),
+                    max_retries=audible_config.get('max_retries', 3),
+                    rate_limit_delay=audible_config.get('rate_limit_delay', 2.0),
+                    enable_cache=audible_config.get('enable_cache', True),
+                    cache_ttl_hours=audible_config.get('cache_ttl_hours', 24),
+                    region=audible_config.get('region', 'us')
+                )
+                self.clients.append(client)
+                logger.info("Audible API client initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Audible client: {str(e)}")
 
         logger.info(f"Initialized {len(self.clients)} API clients")
 
