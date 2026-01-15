@@ -11,15 +11,23 @@ class OpenLibraryClient(BaseAPIClient):
 
     BASE_URL = "https://openlibrary.org"
 
-    def __init__(self, timeout: int = 10, max_results: int = 5):
+    def __init__(self, timeout: int = 10, max_results: int = 5,
+                 max_retries: int = 3, rate_limit_delay: float = 1.0,
+                 enable_cache: bool = True, cache_ttl_hours: int = 24):
         """
         Initialize OpenLibrary API client
 
         Args:
             timeout: Request timeout in seconds
             max_results: Maximum number of results to return
+            max_retries: Maximum number of retry attempts
+            rate_limit_delay: Delay between requests (OpenLibrary recommends 1s)
+            enable_cache: Enable response caching
+            cache_ttl_hours: Cache TTL in hours
         """
-        super().__init__(api_key=None, timeout=timeout)
+        super().__init__(api_key=None, timeout=timeout, max_retries=max_retries,
+                        rate_limit_delay=rate_limit_delay, enable_cache=enable_cache,
+                        cache_ttl_hours=cache_ttl_hours)
         self.source_name = "Open Library"
         self.max_results = max_results
 
@@ -68,6 +76,58 @@ class OpenLibraryClient(BaseAPIClient):
 
         query = ' '.join(query_parts)
         return self._search(query)
+
+    def search_by_publisher(self, publisher: str, title: Optional[str] = None) -> List[APIResult]:
+        """
+        Search for books by publisher
+
+        Args:
+            publisher: Publisher name
+            title: Optional title filter
+
+        Returns:
+            List of search results
+        """
+        query_parts = [f'publisher:{publisher}']
+
+        if title:
+            query_parts.append(f'title:{title}')
+
+        query = ' '.join(query_parts)
+        return self._search(query)
+
+    def get_editions_for_work(self, work_id: str, limit: int = 10) -> List[APIResult]:
+        """
+        Get all editions for a specific work
+
+        Args:
+            work_id: OpenLibrary work ID
+            limit: Maximum number of editions to return
+
+        Returns:
+            List of edition results
+        """
+        if not work_id.startswith('/works/'):
+            work_id = f"/works/{work_id}"
+
+        url = f"{self.BASE_URL}{work_id}/editions.json"
+        params = {'limit': limit}
+
+        data = self._make_request(url, params)
+        if not data:
+            return []
+
+        results = []
+        entries = data.get('entries', [])
+
+        logger.info(f"Found {len(entries)} editions for work {work_id}")
+
+        for entry in entries:
+            result = self._parse_book_data(entry)
+            if result:
+                results.append(result)
+
+        return results
 
     def _search(self, query: str) -> List[APIResult]:
         """
@@ -245,8 +305,33 @@ class OpenLibraryClient(BaseAPIClient):
                 else:
                     description = desc
 
+            # Get work information if this is an edition
+            work_key = None
+            if 'works' in book_data and book_data['works']:
+                work_key = book_data['works'][0].get('key')
+
+            # Extract subtitle if available
+            subtitle = book_data.get('subtitle')
+            full_title = book_data.get('title')
+            if subtitle:
+                full_title = f"{full_title}: {subtitle}"
+
+            # Extract edition name/notes
+            edition_name = book_data.get('edition_name')
+            notes = book_data.get('notes')
+            if isinstance(notes, dict):
+                notes = notes.get('value')
+
+            # Extract physical details
+            physical_format = book_data.get('physical_format')
+            weight = book_data.get('weight')
+
+            # Extract OCLC and LCCN identifiers
+            oclc_numbers = book_data.get('oclc_numbers', [])
+            lccn = book_data.get('lccn', [])
+
             result = APIResult(
-                title=book_data.get('title'),
+                title=full_title,
                 authors=authors,
                 isbn=isbn,
                 isbn13=isbn13,
@@ -262,6 +347,18 @@ class OpenLibraryClient(BaseAPIClient):
                 source_id=book_data.get('key'),
                 raw_data=book_data
             )
+
+            # Add enhanced metadata
+            result.raw_data['_enhanced'] = {
+                'subtitle': subtitle,
+                'work_key': work_key,
+                'edition_name': edition_name,
+                'notes': notes,
+                'physical_format': physical_format,
+                'weight': weight,
+                'oclc_numbers': oclc_numbers,
+                'lccn': lccn
+            }
 
             return result
 

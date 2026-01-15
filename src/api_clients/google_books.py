@@ -11,7 +11,9 @@ class GoogleBooksClient(BaseAPIClient):
 
     BASE_URL = "https://www.googleapis.com/books/v1"
 
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 10, max_results: int = 5):
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 10, max_results: int = 5,
+                 max_retries: int = 3, rate_limit_delay: float = 0.1,
+                 enable_cache: bool = True, cache_ttl_hours: int = 24):
         """
         Initialize Google Books API client
 
@@ -19,8 +21,12 @@ class GoogleBooksClient(BaseAPIClient):
             api_key: Google Books API key (optional but recommended for higher rate limits)
             timeout: Request timeout in seconds
             max_results: Maximum number of results to return
+            max_retries: Maximum number of retry attempts
+            rate_limit_delay: Delay between requests in seconds
+            enable_cache: Enable response caching
+            cache_ttl_hours: Cache TTL in hours
         """
-        super().__init__(api_key, timeout)
+        super().__init__(api_key, timeout, max_retries, rate_limit_delay, enable_cache, cache_ttl_hours)
         self.source_name = "Google Books"
         self.max_results = min(max_results, 40)  # Google Books API max is 40
 
@@ -59,6 +65,38 @@ class GoogleBooksClient(BaseAPIClient):
             query_parts.append(f'inauthor:"{author}"')
 
         query = ' '.join(query_parts)
+        return self._search(query)
+
+    def search_by_publisher(self, publisher: str, title: Optional[str] = None) -> List[APIResult]:
+        """
+        Search for books by publisher
+
+        Args:
+            publisher: Publisher name
+            title: Optional title filter
+
+        Returns:
+            List of search results
+        """
+        query_parts = [f'inpublisher:"{publisher}"']
+
+        if title:
+            query_parts.append(f'intitle:"{title}"')
+
+        query = ' '.join(query_parts)
+        return self._search(query)
+
+    def search_by_subject(self, subject: str) -> List[APIResult]:
+        """
+        Search for books by subject/category
+
+        Args:
+            subject: Subject or category
+
+        Returns:
+            List of search results
+        """
+        query = f'subject:"{subject}"'
         return self._search(query)
 
     def _search(self, query: str) -> List[APIResult]:
@@ -134,12 +172,34 @@ class GoogleBooksClient(BaseAPIClient):
             # Extract subjects/categories
             subjects = volume_info.get('categories', [])
 
-            # Extract thumbnail
+            # Extract thumbnail (prefer larger images)
             image_links = volume_info.get('imageLinks', {})
-            thumbnail_url = image_links.get('thumbnail') or image_links.get('smallThumbnail')
+            thumbnail_url = (
+                image_links.get('large') or
+                image_links.get('medium') or
+                image_links.get('thumbnail') or
+                image_links.get('smallThumbnail')
+            )
+
+            # Extract subtitle if available
+            subtitle = volume_info.get('subtitle')
+            full_title = volume_info.get('title')
+            if subtitle:
+                full_title = f"{full_title}: {subtitle}"
+
+            # Extract maturity rating and content version
+            maturity_rating = volume_info.get('maturityRating')
+            content_version = volume_info.get('contentVersion')
+
+            # Extract print type (BOOK or MAGAZINE)
+            print_type = volume_info.get('printType')
+
+            # Extract average rating and ratings count
+            average_rating = volume_info.get('averageRating')
+            ratings_count = volume_info.get('ratingsCount')
 
             result = APIResult(
-                title=volume_info.get('title'),
+                title=full_title,
                 authors=authors,
                 isbn=isbn,
                 isbn13=isbn13,
@@ -155,6 +215,16 @@ class GoogleBooksClient(BaseAPIClient):
                 source_id=volume_data.get('id'),
                 raw_data=volume_data
             )
+
+            # Add additional metadata to raw_data for potential future use
+            result.raw_data['_enhanced'] = {
+                'subtitle': subtitle,
+                'maturity_rating': maturity_rating,
+                'content_version': content_version,
+                'print_type': print_type,
+                'average_rating': average_rating,
+                'ratings_count': ratings_count
+            }
 
             return result
 

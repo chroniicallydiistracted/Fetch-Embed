@@ -11,6 +11,10 @@ api:
     base_url: "https://www.googleapis.com/books/v1"
     timeout: 10
     max_results: 5
+    max_retries: 3                # Number of retry attempts for failed requests
+    rate_limit_delay: 0.1         # Delay between requests in seconds
+    enable_cache: true            # Enable response caching
+    cache_ttl_hours: 24           # Cache time-to-live in hours
 
   # OpenLibrary API
   openlibrary:
@@ -18,6 +22,22 @@ api:
     base_url: "https://openlibrary.org"
     timeout: 10
     max_results: 5
+    max_retries: 3                # Number of retry attempts for failed requests
+    rate_limit_delay: 1.0         # Delay between requests (OpenLibrary recommends 1s)
+    enable_cache: true            # Enable response caching
+    cache_ttl_hours: 24           # Cache time-to-live in hours
+
+  # Audible API (experimental - requires Amazon Product Advertising API or web scraping)
+  audible:
+    enabled: false
+    api_key: ""                   # Amazon PA API key (optional)
+    base_url: "https://www.audible.com"
+    timeout: 10
+    max_retries: 3                # Number of retry attempts for failed requests
+    rate_limit_delay: 2.0         # Delay between requests (Audible prefers 2s+)
+    enable_cache: true            # Enable response caching
+    cache_ttl_hours: 24           # Cache time-to-live in hours
+    region: "us"                  # Audible region: us, uk, de, fr, etc.
 
   # ISBNdb API (optional, requires paid API key)
   isbndb:

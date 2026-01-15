@@ -3,6 +3,11 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import requests
+import time
+import hashlib
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,21 +71,101 @@ class APIResult:
         }
 
 
+class ResponseCache:
+    """Simple file-based cache for API responses"""
+
+    def __init__(self, cache_dir: str = ".cache/api_responses", ttl_hours: int = 24):
+        """
+        Initialize response cache
+
+        Args:
+            cache_dir: Directory to store cached responses
+            ttl_hours: Time-to-live for cached responses in hours
+        """
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ttl = timedelta(hours=ttl_hours)
+        self.enabled = True
+
+    def _get_cache_key(self, url: str, params: Optional[Dict] = None) -> str:
+        """Generate cache key from URL and parameters"""
+        cache_data = f"{url}:{json.dumps(params or {}, sort_keys=True)}"
+        return hashlib.md5(cache_data.encode()).hexdigest()
+
+    def get(self, url: str, params: Optional[Dict] = None) -> Optional[Dict]:
+        """Get cached response if available and not expired"""
+        if not self.enabled:
+            return None
+
+        cache_key = self._get_cache_key(url, params)
+        cache_file = self.cache_dir / f"{cache_key}.json"
+
+        if not cache_file.exists():
+            return None
+
+        try:
+            # Check if cache is still valid
+            cache_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if cache_age > self.ttl:
+                cache_file.unlink()  # Remove expired cache
+                return None
+
+            with open(cache_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.debug(f"Error reading cache: {e}")
+            return None
+
+    def set(self, url: str, params: Optional[Dict], data: Dict) -> None:
+        """Store response in cache"""
+        if not self.enabled:
+            return
+
+        cache_key = self._get_cache_key(url, params)
+        cache_file = self.cache_dir / f"{cache_key}.json"
+
+        try:
+            with open(cache_file, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            logger.debug(f"Error writing cache: {e}")
+
+
 class BaseAPIClient(ABC):
     """Base class for metadata API clients"""
 
-    def __init__(self, api_key: Optional[str] = None, timeout: int = 10):
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 10,
+                 max_retries: int = 3, rate_limit_delay: float = 0.1,
+                 enable_cache: bool = True, cache_ttl_hours: int = 24):
         """
         Initialize API client
 
         Args:
             api_key: API key (if required)
             timeout: Request timeout in seconds
+            max_retries: Maximum number of retry attempts for failed requests
+            rate_limit_delay: Delay between requests in seconds (rate limiting)
+            enable_cache: Enable response caching
+            cache_ttl_hours: Cache time-to-live in hours
         """
         self.api_key = api_key
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.rate_limit_delay = rate_limit_delay
+        self.last_request_time = 0
         self.session = requests.Session()
         self.source_name = "unknown"
+
+        # Set up proper headers
+        self.session.headers.update({
+            'User-Agent': 'Fetch-Embed/1.0 (Ebook Metadata Service; https://github.com/chroniicallydiistracted/Fetch-Embed)',
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip, deflate'
+        })
+
+        # Initialize cache
+        self.cache = ResponseCache(ttl_hours=cache_ttl_hours)
+        self.cache.enabled = enable_cache
 
     @abstractmethod
     def search_by_isbn(self, isbn: str) -> List[APIResult]:
@@ -140,9 +225,17 @@ class BaseAPIClient(ABC):
 
         return results
 
+    def _rate_limit(self):
+        """Apply rate limiting delay"""
+        if self.rate_limit_delay > 0:
+            elapsed = time.time() - self.last_request_time
+            if elapsed < self.rate_limit_delay:
+                time.sleep(self.rate_limit_delay - elapsed)
+        self.last_request_time = time.time()
+
     def _make_request(self, url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
-        Make HTTP request to API
+        Make HTTP request to API with retry logic, rate limiting, and caching
 
         Args:
             url: Request URL
@@ -151,17 +244,57 @@ class BaseAPIClient(ABC):
         Returns:
             JSON response or None if request failed
         """
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.Timeout:
-            logger.error(f"Request timeout for {url}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed for {url}: {str(e)}")
-        except ValueError as e:
-            logger.error(f"Invalid JSON response from {url}: {str(e)}")
+        # Check cache first
+        cached_response = self.cache.get(url, params)
+        if cached_response is not None:
+            logger.debug(f"Cache hit for {url}")
+            return cached_response
 
+        # Attempt request with retries
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                # Apply rate limiting
+                self._rate_limit()
+
+                # Make request
+                response = self.session.get(url, params=params, timeout=self.timeout)
+                response.raise_for_status()
+                data = response.json()
+
+                # Cache successful response
+                self.cache.set(url, params, data)
+
+                return data
+
+            except requests.exceptions.Timeout as e:
+                last_exception = e
+                logger.warning(f"Request timeout for {url} (attempt {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+
+            except requests.exceptions.HTTPError as e:
+                # Don't retry on client errors (4xx)
+                if 400 <= e.response.status_code < 500:
+                    logger.error(f"Client error for {url}: {e.response.status_code}")
+                    return None
+
+                last_exception = e
+                logger.warning(f"HTTP error for {url}: {str(e)} (attempt {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                logger.warning(f"Request failed for {url}: {str(e)} (attempt {attempt + 1}/{self.max_retries})")
+                if attempt < self.max_retries - 1:
+                    time.sleep(2 ** attempt)  # Exponential backoff
+
+            except ValueError as e:
+                logger.error(f"Invalid JSON response from {url}: {str(e)}")
+                return None
+
+        logger.error(f"All retry attempts failed for {url}: {str(last_exception)}")
         return None
 
     def close(self):
